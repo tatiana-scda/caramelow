@@ -1,0 +1,19 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Expo dev server",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["start"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "serverReadyAction": {
+        "pattern": "[\\s]*(http|https)://[\\w.]+:(\\d+)",
+        "uri": "${serverReadyAction.uri}",
+        "action": "openExternally"
+      }
+    }
+  ]
+}
