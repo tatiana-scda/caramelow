@@ -1,6 +1,19 @@
 # Caramelow Mobile App
 
-TypeScript + React Native mobile application for Android and iOS, built with [Expo SDK 58](https://docs.expo.dev).
+A photo-sharing social app (Instagram-style MVP) built with TypeScript, React Native, and [Expo SDK 58](https://docs.expo.dev).
+
+## What the MVP does
+
+- **Log in / sign up** with a username and password (stored on-device).
+- **Post a picture** with a caption (picked from your photo library).
+- **Follow / unfollow** people from the Search tab or their profile.
+- **Feed** shows posts from people you follow plus your own, newest first.
+- **Profiles** with post grid and posts/followers/following counts.
+
+> The backend is a local mock (AsyncStorage): accounts, follows and posts exist
+> only on this device. Two accounts on the same phone can see and follow each
+> other — phones cannot see each other. See TECH_README.md for the swap-to-a-real-backend
+> plan. Demo account: `ava` / `demo1234`.
 
 ## Quick Start
 

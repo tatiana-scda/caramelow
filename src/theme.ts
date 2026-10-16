@@ -1,10 +1,12 @@
 export const colors = {
-  background: '#FFF9F2',
+  background: '#FFFFFF',
   surface: '#FFFFFF',
-  text: '#3E2C1E',
+  text: '#26180C',
   textMuted: '#8A7263',
   primary: '#C9791C',
   primarySoft: '#F5E3CB',
+  border: '#EAE0D6',
+  danger: '#C0392B',
 } as const;
 
 export const spacing = {
@@ -21,3 +23,5 @@ export const typography = {
   body: 16,
   caption: 13,
 } as const;
+
+export const avatarColors = ['#C9791C', '#8E6BB5', '#4E937A', '#C05555', '#4A6FA5', '#B07A3B'] as const;

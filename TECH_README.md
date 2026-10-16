@@ -30,20 +30,46 @@ generated on demand from `app.json` when you run `expo prebuild` or
 
 ```
 caramelow/
-├── App.tsx              # Root component — renders HomeScreen
-├── index.ts             # Entry point (registers the root component)
-├── app.json             # Expo config (app name, icon, platform settings)
-├── assets/              # App icons and images
+├── app.json             # Expo config (app name, scheme, icon, platform settings)
+├── assets/              # Icons + seed/ demo images
 ├── src/
-│   ├── screens/         # App screens (HomeScreen.tsx)
-│   └── theme.ts         # Colors, spacing, typography tokens
-├── .vscode/             # Editor settings (see below)
+│   ├── app/             # Expo Router routes (every file = screen)
+│   │   ├── _layout.tsx        # Root stack, auth gate
+│   │   ├── login.tsx          # Log in / sign up
+│   │   ├── post.tsx           # Post composer (image picker + caption)
+│   │   ├── user/[id].tsx      # Other user's profile (follow button)
+│   │   └── (tabs)/            # Bottom tabs
+│   │       ├── _layout.tsx    # Tab navigator
+│   │       ├── index.tsx      # Feed
+│   │       ├── search.tsx     # Find and follow people
+│   │       └── profile.tsx    # Own profile
+│   ├── components/      # Reusable UI (PostCard, UserRow, Avatar, ...)
+│   ├── context/        # AuthContext (session state)
+│   ├── lib/            # Data layer
+│   │   ├── backend.ts  # The "API": auth, follows, posts, feed, seed data
+│   │   ├── db.ts       # AsyncStorage tables (users, posts, follows, session)
+│   │   ├── types.ts    # User, Post, Follow, FeedPost, UserStats
+│   │   └── util.ts     # makeId, hashPassword (mock-only), timeAgo
+│   └── theme.ts        # Colors, spacing, typography tokens
+├── .vscode/            # Editor settings
 └── package.json
 ```
 
-Suggested growth points: `src/components/`, `src/hooks/`, `src/utils/`,
-`src/types/`. When navigation is needed, use Expo Router (`npx expo install
-expo-router`) with routes in `src/app/`.
+### Mock backend
+
+All data lives in AsyncStorage under `caramelow.*` keys, seeded on first launch
+with two demo users (`ava`, `leo`, password `demo1234`). Everything is scoped to
+one device: **accounts, follows and posts are not shared between phones.**
+Passwords use a non-cryptographic hash — acceptable only because the data never
+leaves the device.
+
+The UI talks to `src/lib/backend.ts` exclusively (a repository-style API:
+`signUp`, `signIn`, `follow`, `unfollow`, `createPost`, `getFeed`, ...). To move
+to a real backend (e.g. Supabase): implement the same functions against the
+remote API, keep the signatures, and the screens do not change. Post images are
+stored as base64 data URIs — fine for a demo, but AsyncStorage will cap out
+after a few dozen photos; a real backend should upload to object storage
+(Supabase Storage / S3) and store URLs instead.
 
 ### TypeScript
 
