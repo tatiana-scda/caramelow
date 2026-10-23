@@ -67,7 +67,7 @@ The UI talks to `src/lib/backend.ts` exclusively (a repository-style API:
 `signUp`, `signIn`, `follow`, `unfollow`, `createPost`, `getFeed`, ...). To move
 to a real backend (e.g. Supabase): implement the same functions against the
 remote API, keep the signatures, and the screens do not change. Post images are
-stored as base64 data URIs — fine for a demo, but AsyncStorage will cap out
+stored as base64 data URIs — fine for a demo, but A\syncStorage will cap out
 after a few dozen photos; a real backend should upload to object storage
 (Supabase Storage / S3) and store URLs instead.
 

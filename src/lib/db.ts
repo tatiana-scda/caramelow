@@ -1,6 +1,11 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getSupabase } from './supabase';
 
-const KEYS = {
+export const supabase = getSupabase();
+
+export type TableKey = 'profiles' | 'posts' | 'follows';
+
+
+export const storageKeys = {
   users: 'caramelow.users',
   posts: 'caramelow.posts',
   follows: 'caramelow.follows',
@@ -8,33 +13,12 @@ const KEYS = {
   seeded: 'caramelow.seeded',
 } as const;
 
-export type TableKey = 'users' | 'posts' | 'follows';
-
-export const storageKeys = KEYS;
-
 export async function readTable<T>(key: TableKey): Promise<T[]> {
-  const raw = await AsyncStorage.getItem(KEYS[key]);
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as T[]) : [];
-  } catch {
-    return [];
-  }
+  const { data } = await supabase.from(key).select('*');
+  return (data as T[]) || [];
 }
 
 export async function writeTable<T>(key: TableKey, rows: T[]): Promise<void> {
-  await AsyncStorage.setItem(KEYS[key], JSON.stringify(rows));
-}
-
-export async function readValue(key: string): Promise<string | null> {
-  return AsyncStorage.getItem(key);
-}
-
-export async function writeValue(key: string, value: string): Promise<void> {
-  await AsyncStorage.setItem(key, value);
-}
-
-export async function removeValue(key: string): Promise<void> {
-  await AsyncStorage.removeItem(key);
+  const { error } = await supabase.from(key).upsert(rows);
+  if (error) throw error;
 }
