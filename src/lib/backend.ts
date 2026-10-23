@@ -1,209 +1,299 @@
-import { readTable, readValue, removeValue, storageKeys, writeTable, writeValue } from './db';
-import { hashPassword, makeId } from './util';
-import type { Follow, Post, PublicUser, User, UserStats, FeedPost } from './types';
+import * as Linking from 'expo-linking';
+import { decode } from 'base64-arraybuffer';
 
-/**
- * Local mock backend. Everything lives in AsyncStorage on this device only:
- * accounts, follows and posts are NOT shared with other phones. The API shape
- * below mirrors what a real backend (e.g. Supabase) would expose, so the UI
- * does not need to change when it is swapped in.
- */
+import { BackendError, getSupabase, type PostRow, type ProfileRow } from './supabase';
+import type { FeedPost, Post, PublicUser, UserStats } from './types';
 
-const AVATAR_AVA = require('../../assets/seed/ava-avatar.jpg');
-const AVATAR_LEO = require('../../assets/seed/leo-avatar.jpg');
-const POST_AVA_1 = require('../../assets/seed/ava-1.jpg');
-const POST_AVA_2 = require('../../assets/seed/ava-2.jpg');
-const POST_LEO_1 = require('../../assets/seed/leo-1.jpg');
-const POST_LEO_2 = require('../../assets/seed/leo-2.jpg');
+export { BackendError };
 
-export const seedAvatarById: Record<string, number> = {
-  seed_ava: AVATAR_AVA,
-  seed_leo: AVATAR_LEO,
-};
+const MEDIA_BUCKET = 'post-media';
+const SIGNED_URL_SECONDS = 60 * 60;
 
-export class BackendError extends Error {}
-
-function toPublic(user: User): PublicUser {
-  return { id: user.id, username: user.username, displayName: user.displayName, createdAt: user.createdAt };
+function throwIfError(error: { message: string } | null): void {
+  if (error) throw new BackendError(error.message);
 }
 
-async function findUserByUsername(username: string): Promise<User | undefined> {
-  const users = await readTable<User>('users');
-  return users.find((u) => u.username === username.toLowerCase());
+function toPublicUser(row: ProfileRow): PublicUser {
+  return {
+    id: row.id,
+    username: row.username,
+    displayName: row.display_name,
+    createdAt: new Date(row.created_at).getTime(),
+  };
 }
 
-export async function ensureSeeded(): Promise<void> {
-  if (await readValue(storageKeys.seeded)) return;
-  const existing = await readTable<User>('users');
-  if (existing.some((u) => u.id === 'seed_ava')) {
-    await writeValue(storageKeys.seeded, '1');
-    return;
+function toPost(row: PostRow, image: string): Post {
+  return {
+    id: row.id,
+    authorId: row.author_id,
+    image,
+    caption: row.caption,
+    createdAt: new Date(row.created_at).getTime(),
+  };
+}
+
+async function profileForId(id: string): Promise<PublicUser> {
+  const { data, error } = await getSupabase()
+    .from('profiles')
+    .select('id, username, display_name, created_at')
+    .eq('id', id)
+    .single();
+  throwIfError(error);
+  return toPublicUser(data);
+}
+
+async function signedUrlsFor(paths: string[]): Promise<Map<string, string>> {
+  const uniquePaths = [...new Set(paths)];
+  if (uniquePaths.length === 0) return new Map();
+
+  const { data, error } = await getSupabase()
+    .storage.from(MEDIA_BUCKET)
+    .createSignedUrls(uniquePaths, SIGNED_URL_SECONDS);
+  throwIfError(error);
+
+  const urls = new Map<string, string>();
+  for (const item of data) {
+    if (item.path && item.signedUrl) urls.set(item.path, item.signedUrl);
   }
-
-  const now = Date.now();
-  const users: User[] = [
-    {
-      id: 'seed_ava',
-      username: 'ava',
-      displayName: 'Ava Reyes',
-      passwordHash: hashPassword('demo1234'),
-      createdAt: now - 90 * 24 * 3600 * 1000,
-    },
-    {
-      id: 'seed_leo',
-      username: 'leo',
-      displayName: 'Leo Park',
-      passwordHash: hashPassword('demo1234'),
-      createdAt: now - 60 * 24 * 3600 * 1000,
-    },
-  ];
-
-  const posts: Post[] = [
-    { id: makeId('post'), authorId: 'seed_ava', image: POST_AVA_1, caption: 'Golden hour on the coast. No filter needed.', createdAt: now - 3 * 3600 * 1000 },
-    { id: makeId('post'), authorId: 'seed_ava', image: POST_AVA_2, caption: 'Coffee experiments — batch 12. Getting closer.', createdAt: now - 26 * 3600 * 1000 },
-    { id: makeId('post'), authorId: 'seed_leo', image: POST_LEO_1, caption: 'Sketching ideas for the weekend.', createdAt: now - 8 * 3600 * 1000 },
-    { id: makeId('post'), authorId: 'seed_leo', image: POST_LEO_2, caption: 'Found this little place downtown.', createdAt: now - 2 * 24 * 3600 * 1000 },
-  ];
-
-  const follows: Follow[] = [
-    { followerId: 'seed_ava', followingId: 'seed_leo', createdAt: now - 40 * 24 * 3600 * 1000 },
-    { followerId: 'seed_leo', followingId: 'seed_ava', createdAt: now - 30 * 24 * 3600 * 1000 },
-  ];
-
-  await writeTable('users', users);
-  await writeTable('posts', posts);
-  await writeTable('follows', follows);
-  await writeValue(storageKeys.seeded, '1');
+  if (urls.size !== uniquePaths.length) {
+    throw new BackendError('One or more post photos could not be loaded.');
+  }
+  return urls;
 }
 
-// ---- auth ----
+async function postsWithSignedImages(rows: PostRow[]): Promise<Post[]> {
+  const visibleRows = rows.filter((row): row is PostRow & { media_path: string } => row.media_path !== null);
+  const urls = await signedUrlsFor(visibleRows.map((row) => row.media_path));
+  return visibleRows.map((row) => toPost(row, urls.get(row.media_path)!));
+}
 
-export async function signUp(username: string, displayName: string, password: string): Promise<PublicUser> {
-  const normalized = username.trim().toLowerCase();
-  if (!/^[a-z0-9_]{3,20}$/.test(normalized)) {
+export async function signUp(
+  email: string,
+  username: string,
+  displayName: string,
+  password: string,
+): Promise<boolean> {
+  const normalizedEmail = email.trim().toLowerCase();
+  const normalizedUsername = username.trim().toLowerCase();
+  const normalizedDisplayName = displayName.trim();
+
+  if (!/^[a-z0-9_]{3,20}$/.test(normalizedUsername)) {
     throw new BackendError('Username must be 3-20 characters: letters, numbers, underscore.');
   }
-  if (displayName.trim().length < 2) {
-    throw new BackendError('Display name is too short.');
+  if (normalizedDisplayName.length < 2 || normalizedDisplayName.length > 50) {
+    throw new BackendError('Display name must be 2-50 characters.');
   }
-  if (password.length < 6) {
-    throw new BackendError('Password must be at least 6 characters.');
+  if (password.length < 8) {
+    throw new BackendError('Password must be at least 8 characters.');
   }
-  if (await findUserByUsername(normalized)) {
-    throw new BackendError('That username is taken.');
+  if (!normalizedEmail.includes('@')) {
+    throw new BackendError('Enter a valid email address.');
   }
-  const users = await readTable<User>('users');
-  const user: User = {
-    id: makeId('user'),
-    username: normalized,
-    displayName: displayName.trim(),
-    passwordHash: hashPassword(password),
-    createdAt: Date.now(),
-  };
-  await writeTable('users', [...users, user]);
-  await writeValue(storageKeys.session, user.id);
-  return toPublic(user);
+
+  const { data, error } = await getSupabase().auth.signUp({
+    email: normalizedEmail,
+    password,
+    options: {
+      data: { username: normalizedUsername, display_name: normalizedDisplayName },
+      emailRedirectTo: Linking.createURL('auth/callback'),
+    },
+  });
+  throwIfError(error);
+
+  if (data.session) {
+    await profileForId(data.user.id);
+    return true;
+  }
+  return false;
 }
 
-export async function signIn(username: string, password: string): Promise<PublicUser> {
-  const user = await findUserByUsername(username.trim());
-  if (!user || user.passwordHash !== hashPassword(password)) {
-    throw new BackendError('Wrong username or password.');
-  }
-  await writeValue(storageKeys.session, user.id);
-  return toPublic(user);
+export async function signIn(email: string, password: string): Promise<void> {
+  const { error } = await getSupabase().auth.signInWithPassword({
+    email: email.trim().toLowerCase(),
+    password,
+  });
+  throwIfError(error);
 }
 
 export async function signOut(): Promise<void> {
-  await removeValue(storageKeys.session);
+  const { error } = await getSupabase().auth.signOut();
+  throwIfError(error);
 }
 
 export async function getCurrentUser(): Promise<PublicUser | null> {
-  const sessionId = await readValue(storageKeys.session);
-  if (!sessionId) return null;
-  const users = await readTable<User>('users');
-  const user = users.find((u) => u.id === sessionId);
-  return user ? toPublic(user) : null;
+  const { data, error } = await getSupabase().auth.getSession();
+  throwIfError(error);
+  if (!data.session) return null;
+  return profileForId(data.session.user.id);
 }
 
-// ---- users ----
+export async function getProfile(userId: string): Promise<PublicUser> {
+  return profileForId(userId);
+}
+
+export async function exchangeAuthCode(code: string): Promise<void> {
+  const { error } = await getSupabase().auth.exchangeCodeForSession(code);
+  throwIfError(error);
+}
 
 export async function listUsers(): Promise<PublicUser[]> {
-  const users = await readTable<User>('users');
-  return users.map(toPublic).sort((a, b) => a.displayName.localeCompare(b.displayName));
+  const { data, error } = await getSupabase()
+    .from('profiles')
+    .select('id, username, display_name, created_at')
+    .order('display_name', { ascending: true });
+  throwIfError(error);
+  return data.map(toPublicUser);
 }
 
 export async function getUserById(id: string): Promise<PublicUser | null> {
-  const users = await readTable<User>('users');
-  const user = users.find((u) => u.id === id);
-  return user ? toPublic(user) : null;
+  const { data, error } = await getSupabase()
+    .from('profiles')
+    .select('id, username, display_name, created_at')
+    .eq('id', id)
+    .maybeSingle();
+  throwIfError(error);
+  return data ? toPublicUser(data) : null;
 }
 
 export async function getUserStats(userId: string): Promise<UserStats> {
-  const [posts, follows] = await Promise.all([readTable<Post>('posts'), readTable<Follow>('follows')]);
+  const supabase = getSupabase();
+  const [posts, followers, following] = await Promise.all([
+    supabase.from('posts').select('id', { count: 'exact', head: true }).eq('author_id', userId).not('media_path', 'is', null),
+    supabase.from('follows').select('follower_id', { count: 'exact', head: true }).eq('following_id', userId),
+    supabase.from('follows').select('following_id', { count: 'exact', head: true }).eq('follower_id', userId),
+  ]);
+  throwIfError(posts.error);
+  throwIfError(followers.error);
+  throwIfError(following.error);
   return {
-    posts: posts.filter((p) => p.authorId === userId).length,
-    followers: follows.filter((f) => f.followingId === userId).length,
-    following: follows.filter((f) => f.followerId === userId).length,
+    posts: posts.count ?? 0,
+    followers: followers.count ?? 0,
+    following: following.count ?? 0,
   };
 }
 
-// ---- follows ----
-
 export async function isFollowing(followerId: string, followingId: string): Promise<boolean> {
-  const follows = await readTable<Follow>('follows');
-  return follows.some((f) => f.followerId === followerId && f.followingId === followingId);
+  const { data, error } = await getSupabase()
+    .from('follows')
+    .select('follower_id')
+    .eq('follower_id', followerId)
+    .eq('following_id', followingId)
+    .maybeSingle();
+  throwIfError(error);
+  return data !== null;
 }
 
 export async function follow(followerId: string, followingId: string): Promise<void> {
   if (followerId === followingId) throw new BackendError('You cannot follow yourself.');
-  const follows = await readTable<Follow>('follows');
-  if (follows.some((f) => f.followerId === followerId && f.followingId === followingId)) return;
-  await writeTable('follows', [...follows, { followerId, followingId, createdAt: Date.now() }]);
+  const { error } = await getSupabase()
+    .from('follows')
+    .upsert({ follower_id: followerId, following_id: followingId }, {
+      onConflict: 'follower_id,following_id',
+      ignoreDuplicates: true,
+    });
+  throwIfError(error);
 }
 
 export async function unfollow(followerId: string, followingId: string): Promise<void> {
-  const follows = await readTable<Follow>('follows');
-  await writeTable(
-    'follows',
-    follows.filter((f) => !(f.followerId === followerId && f.followingId === followingId)),
-  );
+  const { error } = await getSupabase()
+    .from('follows')
+    .delete()
+    .eq('follower_id', followerId)
+    .eq('following_id', followingId);
+  throwIfError(error);
 }
 
-// ---- posts ----
-
 export async function createPost(authorId: string, image: string, caption: string): Promise<Post> {
-  const post: Post = {
-    id: makeId('post'),
-    authorId,
-    image,
-    caption: caption.trim(),
-    createdAt: Date.now(),
-  };
-  const posts = await readTable<Post>('posts');
-  await writeTable('posts', [post, ...posts]);
-  return post;
+  const match = /^data:(image\/(?:jpeg|png));base64,(.+)$/.exec(image);
+  if (!match) throw new BackendError('Choose a valid JPEG or PNG photo.');
+
+  const supabase = getSupabase();
+  const { data: inserted, error: insertError } = await supabase
+    .from('posts')
+    .insert({ author_id: authorId, caption: caption.trim() })
+    .select('id, author_id, media_path, caption, created_at')
+    .single();
+  throwIfError(insertError);
+
+  const extension = match[1] === 'image/png' ? 'png' : 'jpg';
+  const contentType = match[1];
+  const path = `${authorId}/${inserted.id}.${extension}`;
+  let uploaded = false;
+
+  try {
+    const { error: uploadError } = await supabase.storage
+      .from(MEDIA_BUCKET)
+      .upload(path, decode(match[2]), { contentType, upsert: false });
+    throwIfError(uploadError);
+    uploaded = true;
+
+    const { data: updated, error: updateError } = await supabase
+      .from('posts')
+      .update({ media_path: path })
+      .eq('id', inserted.id)
+      .select('id, author_id, media_path, caption, created_at')
+      .single();
+    throwIfError(updateError);
+
+    const urls = await signedUrlsFor([path]);
+    return toPost(updated, urls.get(path)!);
+  } catch (error) {
+    const cleanupErrors: string[] = [];
+    if (uploaded) {
+      const { error: storageError } = await supabase.storage.from(MEDIA_BUCKET).remove([path]);
+      if (storageError) cleanupErrors.push(storageError.message);
+    }
+    const { error: postError } = await supabase.from('posts').delete().eq('id', inserted.id);
+    if (postError) cleanupErrors.push(postError.message);
+    if (cleanupErrors.length > 0) {
+      throw new BackendError(`Could not publish the post and cleanup also failed: ${cleanupErrors.join('; ')}`);
+    }
+    throw error;
+  }
 }
 
 export async function getUserPosts(userId: string): Promise<Post[]> {
-  const posts = await readTable<Post>('posts');
-  return posts.filter((p) => p.authorId === userId).sort((a, b) => b.createdAt - a.createdAt);
+  const { data, error } = await getSupabase()
+    .from('posts')
+    .select('id, author_id, media_path, caption, created_at')
+    .eq('author_id', userId)
+    .not('media_path', 'is', null)
+    .order('created_at', { ascending: false });
+  throwIfError(error);
+  return postsWithSignedImages(data);
 }
 
 export async function getFeed(currentUserId: string): Promise<FeedPost[]> {
-  const [posts, users, follows] = await Promise.all([
-    readTable<Post>('posts'),
-    readTable<User>('users'),
-    readTable<Follow>('follows'),
-  ]);
-  const followingIds = new Set(
-    follows.filter((f) => f.followerId === currentUserId).map((f) => f.followingId),
-  );
-  followingIds.add(currentUserId);
-  const authorsById = new Map(users.map((u) => [u.id, toPublic(u)]));
-  return posts
-    .filter((p) => followingIds.has(p.authorId))
-    .sort((a, b) => b.createdAt - a.createdAt)
-    .map((post) => ({ post, author: authorsById.get(post.authorId) }))
-    .filter((entry): entry is FeedPost => entry.author !== undefined);
+  const supabase = getSupabase();
+  const { data: follows, error: followsError } = await supabase
+    .from('follows')
+    .select('following_id')
+    .eq('follower_id', currentUserId);
+  throwIfError(followsError);
+
+  const authorIds = [...new Set([currentUserId, ...follows.map((row) => row.following_id)])];
+  const { data: posts, error: postsError } = await supabase
+    .from('posts')
+    .select('id, author_id, media_path, caption, created_at')
+    .in('author_id', authorIds)
+    .not('media_path', 'is', null)
+    .order('created_at', { ascending: false });
+  throwIfError(postsError);
+
+  if (posts.length === 0) return [];
+  const authorIdsWithPosts = [...new Set(posts.map((post) => post.author_id))];
+  const { data: profiles, error: profilesError } = await supabase
+    .from('profiles')
+    .select('id, username, display_name, created_at')
+    .in('id', authorIdsWithPosts);
+  throwIfError(profilesError);
+
+  const urls = await signedUrlsFor(posts.flatMap((post) => post.media_path ? [post.media_path] : []));
+  const authorsById = new Map(profiles.map((profile) => [profile.id, toPublicUser(profile)]));
+
+  return posts.flatMap((post) => {
+    if (!post.media_path || !urls.has(post.media_path)) return [];
+    const author = authorsById.get(post.author_id);
+    return author ? [{ post: toPost(post, urls.get(post.media_path)!), author }] : [];
+  });
 }

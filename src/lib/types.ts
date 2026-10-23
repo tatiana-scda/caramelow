@@ -1,11 +1,3 @@
-export interface User {
-  id: string;
-  username: string;
-  displayName: string;
-  passwordHash: string;
-  createdAt: number;
-}
-
 export interface PublicUser {
   id: string;
   username: string;
@@ -16,18 +8,8 @@ export interface PublicUser {
 export interface Post {
   id: string;
   authorId: string;
-  /**
-   * For posts created in the app this is a base64 data URI.
-   * Seeded demo posts use a bundler asset id (number).
-   */
-  image: string | number;
+  image: string;
   caption: string;
-  createdAt: number;
-}
-
-export interface Follow {
-  followerId: string;
-  followingId: string;
   createdAt: number;
 }
 

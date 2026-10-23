@@ -15,23 +15,29 @@ import { BackendError } from '@/lib/backend';
 import { colors, spacing, typography } from '@/theme';
 
 export default function LoginScreen() {
-  const { signIn, signUp } = useAuth();
+  const { signIn, signUp, error: authError } = useAuth();
   const [mode, setMode] = useState<'login' | 'signup'>('login');
+  const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function onSubmit() {
     if (busy) return;
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
       if (mode === 'login') {
-        await signIn(username, password);
+        await signIn(email, password);
       } else {
-        await signUp(username, displayName, password);
+        const hasSession = await signUp(email, username, displayName, password);
+        if (!hasSession) {
+          setNotice('Account created. Check your email to confirm your address, then log in.');
+        }
       }
     } catch (err) {
       setError(err instanceof BackendError ? err.message : 'Something went wrong. Try again.');
@@ -48,14 +54,27 @@ export default function LoginScreen() {
       <View style={styles.form}>
         <TextInput
           style={styles.input}
-          placeholder="Username"
+          placeholder="Email"
           placeholderTextColor={colors.textMuted}
           autoCapitalize="none"
           autoCorrect={false}
-          value={username}
-          onChangeText={setUsername}
+          keyboardType="email-address"
+          textContentType="emailAddress"
+          autoComplete="email"
+          value={email}
+          onChangeText={setEmail}
         />
         {mode === 'signup' && (
+          <>
+          <TextInput
+            style={styles.input}
+            placeholder="Username"
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            value={username}
+            onChangeText={setUsername}
+          />
           <TextInput
             style={styles.input}
             placeholder="Display name"
@@ -63,6 +82,7 @@ export default function LoginScreen() {
             value={displayName}
             onChangeText={setDisplayName}
           />
+          </>
         )}
         <TextInput
           style={styles.input}
@@ -72,7 +92,8 @@ export default function LoginScreen() {
           value={password}
           onChangeText={setPassword}
         />
-        {error !== null && <Text style={styles.error}>{error}</Text>}
+        {(error ?? authError) !== null && <Text style={styles.error}>{error ?? authError}</Text>}
+        {notice !== null && <Text style={styles.notice}>{notice}</Text>}
 
         <Pressable style={({ pressed }) => [styles.submit, pressed && { opacity: 0.8 }]} onPress={onSubmit} disabled={busy}>
           {busy ? (
@@ -87,16 +108,13 @@ export default function LoginScreen() {
           onPress={() => {
             setMode(mode === 'login' ? 'signup' : 'login');
             setError(null);
+            setNotice(null);
           }}
         >
           <Text style={styles.switchModeText}>
             {mode === 'login' ? "Don't have an account? Sign up" : 'Already have an account? Log in'}
           </Text>
         </Pressable>
-
-        <View style={styles.demoHint}>
-          <Text style={styles.demoText}>Demo account: ava / demo1234</Text>
-        </View>
       </View>
     </KeyboardAvoidingView>
   );
@@ -160,12 +178,8 @@ const styles = StyleSheet.create({
     fontSize: typography.caption,
     fontWeight: '600',
   },
-  demoHint: {
-    marginTop: spacing.xl,
-    alignItems: 'center',
-  },
-  demoText: {
-    color: colors.textMuted,
-    fontSize: typography.caption,
+  notice: {
+    color: colors.primary,
+    marginBottom: spacing.sm,
   },
 });
