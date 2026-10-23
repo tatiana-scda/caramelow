@@ -11,5 +11,8 @@
   },
   "files.associations": {
     "*.tsx": "typescriptreact"
+  },
+  "chat.tools.terminal.autoApprove": {
+    "npx expo": true
   }
 }
